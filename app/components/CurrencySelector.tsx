@@ -213,12 +213,14 @@ export let ALL_CURRENCIES: Currency[] = DEFAULT_CURRENCIES;
 interface CurrencySelectorProps {
   selectedCurrencies: string[];
   onCurrenciesChange: (currencies: string[]) => void;
+  onCurrenciesLoaded?: (currencies: Currency[]) => void;
   maxSelection?: number;
 }
 
 export default function CurrencySelector({
   selectedCurrencies,
   onCurrenciesChange,
+  onCurrenciesLoaded,
   maxSelection = 6,
 }: CurrencySelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -247,18 +249,21 @@ export default function CurrencySelector({
           
           setCurrencies(currencyList);
           ALL_CURRENCIES = currencyList;
+          // 通知父组件货币列表已加载
+          onCurrenciesLoaded?.(currencyList);
         }
       } catch (error) {
         console.error('Error fetching currencies:', error);
         // 使用默认货币列表
         setCurrencies(DEFAULT_CURRENCIES);
+        onCurrenciesLoaded?.(DEFAULT_CURRENCIES);
       } finally {
         setLoading(false);
       }
     };
 
     fetchCurrencies();
-  }, []);
+  }, [onCurrenciesLoaded]);
 
   const selectedCurrencyObjects = useMemo(
     () => currencies.filter(c => selectedCurrencies.includes(c.code)),
