@@ -74,7 +74,7 @@ function SortableCurrencyCard({
     <div
       ref={setNodeRef}
       style={style}
-      className={`rounded-2xl transition-all ${
+      className={`rounded-2xl transition-all select-none ${
         isSelected
           ? 'bg-gradient-to-r from-indigo-500 to-purple-500 p-3 sm:p-4'
           : 'bg-gray-50 p-3 sm:p-4 hover:bg-gray-100'
@@ -386,7 +386,7 @@ export default function Home() {
             return (
               <div
                 key={currency.code}
-                className={`rounded-2xl transition-all ${
+                className={`rounded-2xl transition-all select-none ${
                   isSelected
                     ? 'bg-gradient-to-r from-indigo-500 to-purple-500 p-3 sm:p-4'
                     : 'bg-gray-50 p-3 sm:p-4 hover:bg-gray-100'
