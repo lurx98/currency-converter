@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import CurrencySelector, { ALL_CURRENCIES, type Currency } from './components/CurrencySelector';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -10,454 +9,123 @@ import {
   TouchSensor,
   useSensor,
   useSensors,
-  DragEndEvent,
+  type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
-  useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import CurrencySelector from './components/CurrencySelector';
+import SortableCurrencyCard from './components/SortableCurrencyCard';
+import { useCurrencyList } from './hooks/useCurrencyList';
+import { useExchangeRates } from './hooks/useExchangeRates';
+import { convert, formatAmount, formatRate, getRate, parseAmount } from '@/lib/conversion';
+import { DEFAULT_SELECTED_CODES, MAX_SELECTION, type Currency } from '@/lib/currencies';
+import { readPreferences, writePreference } from '@/lib/storage';
 
-interface Rates {
-  [key: string]: number;
-}
-
-interface SortableCurrencyCardProps {
-  currency: Currency;
-  isSelected: boolean;
-  value: string;
-  amount: string;
-  setAmount: (value: string) => void;
-  setSelectedCurrency: (code: string) => void;
-  selectedCurrencyCodes: string[];
-  getExchangeRate: (code: string) => string;
-}
-
-// 本地存储键名
-const STORAGE_KEY_CURRENCIES = 'currency-converter-selected-currencies';
-const STORAGE_KEY_AMOUNT = 'currency-converter-amount';
-const STORAGE_KEY_SELECTED = 'currency-converter-selected-currency';
-
-// 默认货币
-const DEFAULT_CURRENCIES = ['CNY', 'HKD', 'USD'];
-
-function SortableCurrencyCard({
-  currency,
-  isSelected,
-  value,
-  amount,
-  setAmount,
-  setSelectedCurrency,
-  selectedCurrencyCodes,
-  getExchangeRate,
-}: SortableCurrencyCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: currency.code });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 10 : 1,
-    opacity: isDragging ? 0.8 : 1,
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`rounded-2xl transition-all select-none ${
-        isSelected
-          ? 'bg-gradient-to-r from-indigo-500 to-purple-500 p-3 sm:p-4'
-          : 'bg-gray-50 p-3 sm:p-4 hover:bg-gray-100'
-      } ${isDragging ? 'shadow-2xl scale-105' : ''}`}
-    >
-      <div className="flex items-center gap-2 sm:gap-3 mb-1.5 sm:mb-2">
-        {/* 拖拽手柄 */}
-        <div
-          {...attributes}
-          {...listeners}
-          className={`cursor-grab active:cursor-grabbing touch-none p-1 -ml-1 rounded ${
-            isSelected ? 'hover:bg-white/10' : 'hover:bg-gray-200'
-          }`}
-          title="长按拖拽排序"
-        >
-          <svg
-            className={`w-5 h-5 ${isSelected ? 'text-white/70' : 'text-gray-400'}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M4 8h16M4 16h16"
-            />
-          </svg>
-        </div>
-        
-        <div
-          onClick={() => setSelectedCurrency(currency.code)}
-          className="flex items-center gap-2 sm:gap-3 flex-1 cursor-pointer"
-        >
-          <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center text-lg sm:text-xl font-bold ${
-            isSelected ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-700'
-          }`}>
-            {currency.flag}
-          </div>
-          <div>
-            <div className={`text-xs sm:text-sm font-medium ${isSelected ? 'text-white' : 'text-gray-600'}`}>
-              {currency.name}
-            </div>
-          </div>
-        </div>
-      </div>
-      
-      {isSelected ? (
-        <div className="relative" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="number"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="w-full px-3 py-2.5 sm:px-4 sm:py-3 bg-white rounded-xl text-lg sm:text-xl font-semibold text-gray-800 outline-none"
-            placeholder="0.00"
-            min="0"
-            step="0.01"
-          />
-          <span className="absolute right-3 sm:right-4 top-1/2 -translate-y-1/2 text-lg sm:text-xl text-indigo-500">
-            {currency.symbol}
-          </span>
-        </div>
-      ) : (
-        <div
-          className="relative cursor-pointer"
-          onClick={() => setSelectedCurrency(currency.code)}
-        >
-          <div className="text-xl sm:text-2xl font-bold text-gray-800 py-1">
-            {value}
-          </div>
-          <span className="absolute right-0 top-1/2 -translate-y-1/2 text-lg sm:text-xl text-indigo-500 font-semibold">
-            {currency.symbol}
-          </span>
-        </div>
-      )}
-      
-      <div className={`text-xs sm:text-sm mt-1 sm:mt-2 ${isSelected ? 'text-white/90' : 'text-gray-500'}`}>
-        1 {selectedCurrencyCodes[0]} = {getExchangeRate(currency.code)} {currency.code}
-      </div>
-    </div>
-  );
-}
+const DEFAULT_AMOUNT = '100';
+// 长按 250ms 后才触发拖拽，避免与点击、滚动冲突
+const DRAG_ACTIVATION = { delay: 250, tolerance: 5 };
 
 export default function Home() {
-  const [selectedCurrencyCodes, setSelectedCurrencyCodes] = useState<string[]>(DEFAULT_CURRENCIES);
-  const [selectedCurrency, setSelectedCurrency] = useState<string>('CNY');
-  const [amount, setAmount] = useState<string>('100');
-  const [rates, setRates] = useState<Rates>({});
-  const [loading, setLoading] = useState(false);
-  const [lastUpdate, setLastUpdate] = useState<string>('');
-  const [isMounted, setIsMounted] = useState(false);
-  const [allCurrencies, setAllCurrencies] = useState<Currency[]>(ALL_CURRENCIES);
-  const [currenciesLoading, setCurrenciesLoading] = useState(true);
+  const [selectedCodes, setSelectedCodes] = useState<string[]>(() => Array.from(DEFAULT_SELECTED_CODES));
+  const [selectedCurrency, setSelectedCurrency] = useState<string>(DEFAULT_SELECTED_CODES[0]);
+  const [amount, setAmount] = useState<string>(DEFAULT_AMOUNT);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
 
-  // 客户端挂载后从本地存储加载数据
+  const {
+    currencies: allCurrencies,
+    loading: currenciesLoading,
+    error: currenciesError,
+  } = useCurrencyList();
+  const { table, missing, loading, error, lastUpdate, refresh } = useExchangeRates(selectedCodes, prefsLoaded);
+
+  // 客户端挂载后从本地存储恢复设置（只有校验通过的值才会被使用）
   useEffect(() => {
-    setIsMounted(true);
-    
-    try {
-      const savedCurrencies = localStorage.getItem(STORAGE_KEY_CURRENCIES);
-      const savedAmount = localStorage.getItem(STORAGE_KEY_AMOUNT);
-      const savedSelected = localStorage.getItem(STORAGE_KEY_SELECTED);
-
-      if (savedCurrencies) {
-        const currencies = JSON.parse(savedCurrencies);
-        if (Array.isArray(currencies) && currencies.length > 0) {
-          setSelectedCurrencyCodes(currencies);
-        }
-      }
-
-      if (savedAmount) {
-        setAmount(savedAmount);
-      }
-
-      if (savedSelected) {
-        setSelectedCurrency(savedSelected);
-      }
-    } catch (error) {
-      console.error('Error loading from localStorage:', error);
-    }
+    const prefs = readPreferences();
+    if (prefs.codes) setSelectedCodes(prefs.codes);
+    if (prefs.amount !== null) setAmount(prefs.amount);
+    if (prefs.selected) setSelectedCurrency(prefs.selected);
+    setPrefsLoaded(true);
   }, []);
 
-  // 保存货币选择到本地存储
   useEffect(() => {
-    if (isMounted) {
-      try {
-        localStorage.setItem(STORAGE_KEY_CURRENCIES, JSON.stringify(selectedCurrencyCodes));
-      } catch (error) {
-        console.error('Error saving currencies to localStorage:', error);
-      }
-    }
-  }, [selectedCurrencyCodes, isMounted]);
+    if (prefsLoaded) writePreference('codes', JSON.stringify(selectedCodes));
+  }, [selectedCodes, prefsLoaded]);
 
-  // 保存金额到本地存储
   useEffect(() => {
-    if (isMounted) {
-      try {
-        localStorage.setItem(STORAGE_KEY_AMOUNT, amount);
-      } catch (error) {
-        console.error('Error saving amount to localStorage:', error);
-      }
-    }
-  }, [amount, isMounted]);
+    if (prefsLoaded) writePreference('amount', amount);
+  }, [amount, prefsLoaded]);
 
-  // 保存当前选中货币到本地存储
   useEffect(() => {
-    if (isMounted) {
-      try {
-        localStorage.setItem(STORAGE_KEY_SELECTED, selectedCurrency);
-      } catch (error) {
-        console.error('Error saving selected currency to localStorage:', error);
-      }
+    if (prefsLoaded) writePreference('selected', selectedCurrency);
+  }, [selectedCurrency, prefsLoaded]);
+
+  // 真实货币列表加载成功后，去掉列表里不存在的货币；用的是后备列表时不处理，避免误删用户设置
+  useEffect(() => {
+    if (currenciesLoading || currenciesError) return;
+
+    const known = new Set(allCurrencies.map(c => c.code));
+    setSelectedCodes(prev => {
+      const valid = prev.filter(code => known.has(code));
+      if (valid.length === prev.length) return prev;
+      return valid.length > 0 ? valid : Array.from(DEFAULT_SELECTED_CODES);
+    });
+  }, [allCurrencies, currenciesLoading, currenciesError]);
+
+  // 确保当前输入的货币仍在列表中
+  useEffect(() => {
+    if (!selectedCodes.includes(selectedCurrency)) {
+      setSelectedCurrency(selectedCodes[0]);
     }
-  }, [selectedCurrency, isMounted]);
+  }, [selectedCodes, selectedCurrency]);
 
-  // 当货币列表加载完成时的回调
-  const handleCurrenciesLoaded = useCallback((currencies: Currency[]) => {
-    setAllCurrencies(currencies);
-    setCurrenciesLoading(false);
-  }, []);
-
-  // 配置拖拽传感器 - 长按 250ms 后触发拖拽
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        delay: 250,
-        tolerance: 5,
-      },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: {
-        delay: 250,
-        tolerance: 5,
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
+    useSensor(PointerSensor, { activationConstraint: DRAG_ACTIVATION }),
+    useSensor(TouchSensor, { activationConstraint: DRAG_ACTIVATION }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
   const currencies = useMemo(
-    () => allCurrencies.filter(c => selectedCurrencyCodes.includes(c.code))
-        .sort((a, b) => selectedCurrencyCodes.indexOf(a.code) - selectedCurrencyCodes.indexOf(b.code)),
-    [selectedCurrencyCodes, allCurrencies]
+    () => selectedCodes
+      .map(code => allCurrencies.find(c => c.code === code))
+      .filter((currency): currency is Currency => currency !== undefined),
+    [selectedCodes, allCurrencies]
   );
 
-  const fetchRates = async () => {
-    setLoading(true);
-    try {
-      const baseCurrency = selectedCurrencyCodes[0]; // 使用第一个货币作为基准
-      const otherCurrencies = selectedCurrencyCodes.filter(c => c !== baseCurrency);
-      
-      if (otherCurrencies.length === 0) {
-        setRates({});
-        setLoading(false);
-        return;
-      }
-      
-      const response = await fetch(
-        `/api/rates?base=${baseCurrency}&targets=${otherCurrencies.join(',')}`
-      );
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch rates');
-      }
-
-      const data = await response.json();
-      setRates(data.rates);
-      setLastUpdate(new Date().toLocaleTimeString('zh-CN'));
-    } catch (error) {
-      console.error('Error fetching rates:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (isMounted) {
-      fetchRates();
-      // 每30秒自动更新一次汇率
-      const interval = setInterval(fetchRates, 30000);
-      return () => clearInterval(interval);
-    }
-  }, [selectedCurrencyCodes, isMounted]);
-
-  // 当选择的货币变化时，确保当前选中的货币仍在列表中
-  useEffect(() => {
-    if (!selectedCurrencyCodes.includes(selectedCurrency)) {
-      setSelectedCurrency(selectedCurrencyCodes[0]);
-    }
-  }, [selectedCurrencyCodes, selectedCurrency]);
-
-  const calculateConversion = (targetCurrency: string): string => {
-    const inputAmount = parseFloat(amount);
-    if (isNaN(inputAmount) || inputAmount <= 0) return '0.00';
-    
-    if (targetCurrency === selectedCurrency) {
-      return inputAmount.toFixed(2);
-    }
-
-    // 计算相对于基准货币的汇率
-    const baseCurrency = selectedCurrencyCodes[0];
-    
-    if (selectedCurrency === baseCurrency) {
-      // 如果选中的是基准货币，直接使用汇率
-      const rate = rates[targetCurrency];
-      if (!rate) return '加载中...';
-      return (inputAmount * rate).toFixed(2);
-    } else if (targetCurrency === baseCurrency) {
-      // 如果目标是基准货币，使用反向汇率
-      const rate = rates[selectedCurrency];
-      if (!rate) return '加载中...';
-      return (inputAmount / rate).toFixed(2);
-    } else {
-      // 两个都不是基准货币，需要通过基准货币转换
-      const rateFrom = rates[selectedCurrency];
-      const rateTo = rates[targetCurrency];
-      if (!rateFrom || !rateTo) return '加载中...';
-      return (inputAmount / rateFrom * rateTo).toFixed(2);
-    }
-  };
-
-  const getExchangeRate = (currency: string): string => {
-    const baseCurrency = selectedCurrencyCodes[0];
-    
-    if (currency === baseCurrency) {
-      return '1.0000';
-    }
-    
-    const rate = rates[currency];
-    if (!rate) return '...';
-    
-    return rate.toFixed(4);
-  };
-
-  // 处理拖拽结束事件
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
+    if (!over || active.id === over.id) return;
 
-    if (over && active.id !== over.id) {
-      setSelectedCurrencyCodes((items) => {
-        const oldIndex = items.indexOf(active.id as string);
-        const newIndex = items.indexOf(over.id as string);
-        return arrayMove(items, oldIndex, newIndex);
-      });
-    }
+    setSelectedCodes(prev => {
+      const oldIndex = prev.indexOf(String(active.id));
+      const newIndex = prev.indexOf(String(over.id));
+      return oldIndex === -1 || newIndex === -1 ? prev : arrayMove(prev, oldIndex, newIndex);
+    });
+  }, []);
+
+  const baseCode = selectedCodes[0];
+  const inputAmount = parseAmount(amount);
+  const selectedHasNoRate = missing.includes(selectedCurrency);
+
+  const describeValue = (code: string): string => {
+    if (inputAmount === null) return formatAmount(0);
+    const value = convert(inputAmount, selectedCurrency, code, table);
+    if (value !== null) return formatAmount(value);
+    return selectedHasNoRate || missing.includes(code) ? '暂无汇率' : '加载中...';
   };
 
-  // 渲染货币卡片列表
-  const renderCurrencyList = () => {
-    // 显示货币列表加载状态
-    if (currenciesLoading || currencies.length === 0) {
-      return (
-        <div className="text-center py-8 text-gray-500">
-          <div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full mb-2"></div>
-          <p className="text-sm">正在加载货币列表...</p>
-        </div>
-      );
-    }
-
-    // 服务端渲染或尚未挂载时，显示静态列表
-    if (!isMounted) {
-      return (
-        <div className="space-y-2.5">
-          {currencies.map((currency) => {
-            const value = calculateConversion(currency.code);
-            const isSelected = currency.code === selectedCurrency;
-            
-            return (
-              <div
-                key={currency.code}
-                className={`rounded-2xl transition-all select-none ${
-                  isSelected
-                    ? 'bg-gradient-to-r from-indigo-500 to-purple-500 p-3 sm:p-4'
-                    : 'bg-gray-50 p-3 sm:p-4 hover:bg-gray-100'
-                }`}
-              >
-                <div className="flex items-center gap-2 sm:gap-3 mb-1.5 sm:mb-2">
-                  <div className={`p-1 -ml-1 rounded ${isSelected ? 'hover:bg-white/10' : 'hover:bg-gray-200'}`}>
-                    <svg
-                      className={`w-5 h-5 ${isSelected ? 'text-white/70' : 'text-gray-400'}`}
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
-                    </svg>
-                  </div>
-                  <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center text-lg sm:text-xl font-bold ${
-                    isSelected ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-700'
-                  }`}>
-                    {currency.flag}
-                  </div>
-                  <div className={`text-xs sm:text-sm font-medium ${isSelected ? 'text-white' : 'text-gray-600'}`}>
-                    {currency.name}
-                  </div>
-                </div>
-                <div className="text-xl sm:text-2xl font-bold text-gray-800 py-1">{value}</div>
-                <div className={`text-xs sm:text-sm mt-1 sm:mt-2 ${isSelected ? 'text-white/90' : 'text-gray-500'}`}>
-                  1 {selectedCurrencyCodes[0]} = {getExchangeRate(currency.code)} {currency.code}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      );
-    }
-
-    // 客户端渲染时使用可拖拽卡片
-    return (
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
-      >
-        <SortableContext
-          items={currencies.map(c => c.code)}
-          strategy={verticalListSortingStrategy}
-        >
-          <div className="space-y-2.5">
-            {currencies.map((currency) => {
-              const value = calculateConversion(currency.code);
-              const isSelected = currency.code === selectedCurrency;
-              
-              return (
-                <SortableCurrencyCard
-                  key={currency.code}
-                  currency={currency}
-                  isSelected={isSelected}
-                  value={value}
-                  amount={amount}
-                  setAmount={setAmount}
-                  setSelectedCurrency={setSelectedCurrency}
-                  selectedCurrencyCodes={selectedCurrencyCodes}
-                  getExchangeRate={getExchangeRate}
-                />
-              );
-            })}
-          </div>
-        </SortableContext>
-      </DndContext>
-    );
+  const describeRate = (code: string): string => {
+    const rate = getRate(table, baseCode, code);
+    return `1 ${baseCode} = ${rate === null ? '...' : formatRate(rate)} ${code}`;
   };
+
+  const formattedLastUpdate = lastUpdate?.toLocaleTimeString('zh-CN') ?? '';
+  const statusText = loading ? '正在获取汇率...' : formattedLastUpdate && `最后更新: ${formattedLastUpdate}`;
+  // 只在客户端（读取完本地设置、拿到货币列表后）渲染可拖拽列表，避免 SSR 水合不一致
+  const showCards = prefsLoaded && !currenciesLoading && currencies.length > 0;
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-indigo-600 py-4 sm:py-8 px-4">
@@ -470,17 +138,18 @@ export default function Home() {
                 实时汇率计算器
               </h1>
             </div>
-            <p className="text-xs sm:text-sm text-gray-500">
-              {loading ? '正在获取汇率...' : lastUpdate && `最后更新: ${lastUpdate}`}
+            <p className="text-xs sm:text-sm text-gray-500" aria-live="polite">
+              {statusText}
             </p>
           </div>
 
           {/* 货币选择器 */}
           <CurrencySelector
-            selectedCurrencies={selectedCurrencyCodes}
-            onCurrenciesChange={setSelectedCurrencyCodes}
-            onCurrenciesLoaded={handleCurrenciesLoaded}
-            maxSelection={5}
+            currencies={allCurrencies}
+            loading={currenciesLoading}
+            selectedCodes={selectedCodes}
+            onChange={setSelectedCodes}
+            maxSelection={MAX_SELECTION}
           />
 
           {/* 提示信息 */}
@@ -489,20 +158,64 @@ export default function Home() {
           </p>
 
           {/* 货币选择和输入 - 可拖拽排序 */}
-          {renderCurrencyList()}
+          {showCards ? (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={currencies.map(c => c.code)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-2.5">
+                  {currencies.map(currency => (
+                    <SortableCurrencyCard
+                      key={currency.code}
+                      currency={currency}
+                      isSelected={currency.code === selectedCurrency}
+                      displayValue={describeValue(currency.code)}
+                      amount={amount}
+                      rateLabel={describeRate(currency.code)}
+                      onAmountChange={setAmount}
+                      onSelect={setSelectedCurrency}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              <div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full mb-2"></div>
+              <p className="text-sm">正在加载货币列表...</p>
+            </div>
+          )}
 
-          {/* 错误提示 */}
-          {!loading && Object.keys(rates).length === 0 && isMounted && currencies.length > 1 && (
-            <div className="mt-3 sm:mt-4 p-2.5 sm:p-3 bg-red-50 border border-red-200 rounded-xl">
+          {/* 错误与提示 */}
+          {error && (
+            <div role="alert" className="mt-3 sm:mt-4 p-2.5 sm:p-3 bg-red-50 border border-red-200 rounded-xl">
               <p className="text-xs sm:text-sm text-red-600 text-center">
-                ✗ 获取汇率失败，请稍后重试
+                ✗ {table && formattedLastUpdate
+                  ? `汇率更新失败，当前显示的是 ${formattedLastUpdate} 的数据`
+                  : error}
               </p>
             </div>
+          )}
+          {!error && missing.length > 0 && (
+            <div className="mt-3 sm:mt-4 p-2.5 sm:p-3 bg-amber-50 border border-amber-200 rounded-xl">
+              <p className="text-xs sm:text-sm text-amber-700 text-center">
+                暂时无法获取以下货币的汇率：{missing.join('、')}
+              </p>
+            </div>
+          )}
+          {currenciesError && (
+            <p className="mt-2 text-xs text-gray-400 text-center">{currenciesError}</p>
           )}
 
           {/* 刷新按钮 */}
           <button
-            onClick={fetchRates}
+            type="button"
+            onClick={refresh}
             disabled={loading}
             className="w-full mt-3 sm:mt-4 px-4 sm:px-6 py-2.5 sm:py-3 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-xl font-medium hover:from-indigo-600 hover:to-purple-600 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed transition-all shadow-lg flex items-center justify-center gap-2 text-sm sm:text-base">
             <span className="text-base sm:text-lg">🔄</span>
